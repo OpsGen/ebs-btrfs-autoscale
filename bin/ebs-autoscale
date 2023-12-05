@@ -185,23 +185,23 @@ calc_threshold_down() {
   local num_devices=$1
   local threshold=${INITIAL_UTILIZATION_THRESHOLD_DOWN}
 
-  if [ "$num_devices" -eq "1" ]; then
+  if [ "$num_devices" -eq 1 ]; then
     threshold=30
-  elif [ "$num_devices" -eq "2" ]; then
+  elif [ "$num_devices" -eq 2 ]; then
     threshold=35
-  elif [ "$num_devices" -eq "3" ]; then
+  elif [ "$num_devices" -eq 3 ]; then
     threshold=40
-  elif [ "$num_devices" -eq "4" ]; then
+  elif [ "$num_devices" -eq 4 ]; then
     threshold=45
-  elif [ "$num_devices" -eq "5" ]; then
+  elif [ "$num_devices" -eq 5 ]; then
     threshold=50
-  elif [ "$num_devices" -eq "6" ]; then
+  elif [ "$num_devices" -eq 6 ]; then
     threshold=55
-  elif [ "$num_devices" -eq "7" ]; then
+  elif [ "$num_devices" -eq 7 ]; then
     threshold=60
-  elif [ "$num_devices" -eq "8" ]; then
+  elif [ "$num_devices" -eq 8 ]; then
     threshold=65
-  elif [ "$num_devices" -eq "9" ]; then
+  elif [ "$num_devices" -eq 9 ]; then
     threshold=70
   else
     threshold=${INITIAL_UTILIZATION_THRESHOLD_DOWN} # threshold=30
