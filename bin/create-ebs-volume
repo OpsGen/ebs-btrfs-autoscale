@@ -347,8 +347,6 @@ function create_and_attach_volume() {
     fi
     set -e
 
-    echo "$device after attach-volume" >> /home/ubuntu/LOG
-
     logthis "waiting for volume $volume_id on filesystem"
     while true; do
         if [[ "$device" == "/dev/xvdba" ]]; then
@@ -377,8 +375,6 @@ function create_and_attach_volume() {
         sleep 1
     done
 
-    echo "$device as a volume $volume_id on filesystem" >> /home/ubuntu/LOG
-
     if [[ "$device" == "/dev/nvme1n1" ]]; then
         device="/dev/xvdba"
     elif [[ "$device" == "/dev/nvme2n1" ]]; then
@@ -398,8 +394,6 @@ function create_and_attach_volume() {
     elif [[ "$device" == "/dev/nvme9n1" ]]; then
         device="/dev/xvdbi"        
     fi
-
-    echo "$device before modify-instance-attribute" >> /home/ubuntu/LOG
 
     # set volume delete on termination
     aws ec2 modify-instance-attribute \

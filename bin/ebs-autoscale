@@ -116,9 +116,7 @@ get_last_volume_id() {
       last_volume_id=$(echo "$last_volume_id_response" | jq '.Volumes[-1].Attachments[0].VolumeId')
       if [ "$last_volume_id" -ge 0 ]; then
           break
-      fi
-
-      echo "Last volume ID: $last_volume_id" >> /home/ubuntu/DEVICE.log      
+      fi 
 
       if [ $i -eq $max_attempts ] ; then
         logthis "Could not determine the number of last_volume_id after $i attempts. Last response was: $last_volume_id_response"
@@ -150,8 +148,6 @@ get_last_volume_device() {
       if [ "$last_volume_device" -ge 0 ]; then
           break
       fi
-
-      echo "Last volume Device: $last_volume_device" >> /home/ubuntu/DEVICE.log
 
       if [ $i -eq $max_attempts ] ; then
         logthis "Could not determine the number of last_volume_device after $i attempts. Last response was: $last_volume_device_response"
@@ -255,7 +251,6 @@ add_space () {
   local num_devices=$1
   if [ "${num_devices}" -ge "$MAX_EBS_VOLUME_COUNT" ]; then
     logthis "No more volumes can be safely added."
-    echo "No more volumes can be safely added." >> /home/ubuntu/DEVICE.log
     return 0
   fi
 
@@ -265,10 +260,8 @@ add_space () {
     logthis "Extending logical volume ${MOUNTPOINT} by ${vol_size}GB"
 
     DEVICE=$(${BASEDIR}/create-ebs-volume --size ${vol_size} --max-attached-volumes ${MAX_EBS_VOLUME_COUNT})
-    echo "Got DEVICE from create-ebs-volume: $DEVICE">> /home/ubuntu/DEVICE.log
 
     exit_status=$?
-    echo exit_status=$exit_status >> /home/ubuntu/DEVICE.log
     if [ $exit_status -eq 0 ]; then
 
       if [[ "$DEVICE" == "/dev/xvdba" ]]; then
@@ -291,15 +284,12 @@ add_space () {
           DEVICE="/dev/nvme9n1"
       fi
 
-      echo "Correspondent NVMe device: $DEVICE" >> /home/ubuntu/DEVICE.log
-
       if [ "${FILE_SYSTEM}" = "btrfs" ]; then
         logthis "Adding device ${DEVICE} to logical volume ${MOUNTPOINT}"
         btrfs device add ${DEVICE} ${MOUNTPOINT}
         btrfs balance start -m ${MOUNTPOINT}
       else
         logthis "Adding device ${DEVICE} to logical volume /dev/mapper/${LVM_VG}-${LVM_LV}"
-        echo "Adding device ${DEVICE} to logical volume /dev/mapper/${LVM_VG}-${LVM_LV}" >> /home/ubuntu/DEVICE.log
         vgextend ${LVM_VG} ${DEVICE}
         lvresize -l 100%VG /dev/mapper/${LVM_VG}-${LVM_LV}
         resize2fs /dev/mapper/${LVM_VG}-${LVM_LV}
@@ -320,7 +310,6 @@ remove_space () {
   local num_devices=$1
   if [ "${num_devices}" -eq 1 ]; then
     logthis "No more volumes can be safely removed."
-    echo "No more volumes can be safely removed." >> /home/ubuntu/DEVICE.log
     return 0
   fi
 
@@ -330,7 +319,6 @@ remove_space () {
 
   if [[ -z $LAST_DEVICE ]] || [[ -z $LAST_VOLUME_ID ]]; then
     logthis "Variable is empty: LAST_DEVICE: $LAST_DEVICE LAST_VOLUME_ID: $LAST_VOLUME_ID."
-    echo "Variable is empty: LAST_DEVICE: $LAST_DEVICE LAST_VOLUME_ID: $LAST_VOLUME_ID." >> /home/ubuntu/DEVICE.log
     return 0
   fi
 
@@ -342,7 +330,6 @@ remove_space () {
     NVME_DEVICE="/dev/nvme1n1"
   elif [ "$LAST_DEVICE" = "/dev/xvdbb" ]; then
     NVME_DEVICE="/dev/nvme2n1"
-    echo "ELIF triggered device $LAST_DEVICE." >> /home/ubuntu/DEVICE.log
   elif [ "$LAST_DEVICE" = "/dev/xvdbc" ]; then
     NVME_DEVICE="/dev/nvme3n1"
   elif [ "$LAST_DEVICE" = "/dev/xvdbd" ]; then
@@ -359,21 +346,17 @@ remove_space () {
     NVME_DEVICE="/dev/nvme9n1"
   else
     logthis "Couldn't recognize device $LAST_DEVICE."
-    echo "Couldn't recognize device $LAST_DEVICE." >> /home/ubuntu/DEVICE.log
     return 0
   fi
 
   logthis "Decreasing logical volume ${MOUNTPOINT} by 1 NVMe $LAST_DEVICE $NVME_DEVICE"
-  echo "Time to remove DEVICE: $LAST_DEVICE $NVME_DEVICE">> /home/ubuntu/DEVICE.log
 
   if [ "${FILE_SYSTEM}" = "btrfs" ] && [ "$LAST_DEVICE" != "/dev/xvdba" ]; then
     logthis "Removing device ${LAST_DEVICE} ${NVME_DEVICE} from mount point ${MOUNTPOINT}"
-    echo "Removing device ${LAST_DEVICE} ${NVME_DEVICE} from mount point ${MOUNTPOINT}" >> /home/ubuntu/DEVICE.log
     sudo btrfs device delete ${NVME_DEVICE} ${MOUNTPOINT}
     sudo btrfs balance start -m ${MOUNTPOINT}
 
     logthis "Detaching and removing EBS volume ${LAST_VOLUME_ID}."
-    echo "Detaching and removing EBS volume ${LAST_VOLUME_ID}." >> /home/ubuntu/DEVICE.log
     aws ec2 detach-volume --volume-id ${LAST_VOLUME_ID} > /dev/null
     for i in {1..3} ; do
        if aws ec2 wait volume-available --region $AWS_REGION --volume-ids $LAST_VOLUME_ID; then
@@ -384,16 +367,13 @@ remove_space () {
     aws ec2 delete-volume --volume-id ${LAST_VOLUME_ID} > /dev/null
   elif [ "${FILE_SYSTEM}" = "btrfs" ] && [ "$LAST_DEVICE" = "/dev/xvdba" ]; then
     logthis "There is only initial device $LAST_DEVICE on the system. Cancel deletion."
-    echo "There is only initial device $LAST_DEVICE on the system. Cancel deletion." >> /home/ubuntu/DEVICE.log
     return 0
   else
     logthis "Couldn't remove volume. LVM is not supported."
-    echo "Couldn't remove volume. LVM is not supported." >> /home/ubuntu/DEVICE.log
     return 0
   fi
 
   logthis "Finished removing physical volume."
-  echo "Finished removing physical volume." >> /home/ubuntu/DEVICE.log
 }
 
 # number of event loops between utilization status log lines
@@ -432,7 +412,6 @@ while true; do
     # get number of devices only when we need to decrease space
   	NUM_DEVICES=$(get_num_devices)
     logthis "Space can be reduced, utilisation: (${PCT_UTILIZATION}%): Removing volume."
-    echo "Space can be reduced, utilisation: (${PCT_UTILIZATION}%): Removing volume." >> /home/ubuntu/DEVICE.log
     remove_space "$NUM_DEVICES"
 	  NUM_DEVICES=$(expr $NUM_DEVICES - 1 )
     THRESHOLD_DOWN=$(calc_threshold_down "$NUM_DEVICES")
