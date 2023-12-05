@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Copyright Amazon.com, Inc. or its affiliates.
 #
 #  Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,8 @@
 #  IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 #  POSSIBILITY OF SUCH DAMAGE.
 
+set -x
+
 . /usr/local/amazon-ebs-autoscale/shared/utils.sh
 
 initialize
@@ -36,7 +38,8 @@ MIN_EBS_VOLUME_SIZE=$(get_config_value .limits.min_ebs_volume_size)
 MAX_EBS_VOLUME_SIZE=$(get_config_value .limits.max_ebs_volume_size)
 MAX_LOGICAL_VOLUME_SIZE=$(get_config_value .limits.max_logical_volume_size)
 MAX_EBS_VOLUME_COUNT=$(get_config_value .limits.max_ebs_volume_count)
-INITIAL_UTILIZATION_THRESHOLD=$(get_config_value .limits.initial_utilization_threshold)
+INITIAL_UTILIZATION_THRESHOLD_UP=$(get_config_value .limits.initial_utilization_threshold_up)
+INITIAL_UTILIZATION_THRESHOLD_DOWN=$(get_config_value .limits.initial_utilization_threshold_down)
 
 FILE_SYSTEM=$(get_config_value .filesystem)
 
@@ -75,9 +78,9 @@ get_num_devices() {
 
       attached_volumes_response=$(
         aws ec2 describe-volumes \
-            --region $AWS_REGION \
-            --filters Name=attachment.instance-id,Values=$INSTANCE_ID Name=tag-key,Values=$TAG
-       )
+          --region $AWS_REGION \
+          --filters Name=attachment.instance-id,Values=$INSTANCE_ID Name=tag-key,Values=$TAG
+        )
 
       attached_volumes=$(echo "$attached_volumes_response" | jq '.Volumes | length')
       if [ "$attached_volumes" -ge 0 ]; then
@@ -95,21 +98,117 @@ get_num_devices() {
   echo "$attached_volumes"
 }
 
-calc_threshold() {
+get_last_volume_id() {
+  TAG=amazon-ebs-autoscale-creation-time
+
+  local last_volume_id=""
+  local max_attempts=5
+
+  for i in $(eval echo "{0..$max_attempts}") ; do
+      local last_volume_id=""
+
+      last_volume_id_response=$(
+        aws ec2 describe-volumes \
+          --region $AWS_REGION \
+          --filters Name=attachment.instance-id,Values=$INSTANCE_ID Name=tag-key,Values=$TAG
+      )
+
+      last_volume_id=$(echo "$last_volume_id_response" | jq '.Volumes[-1].Attachments[0].VolumeId')
+      if [ "$last_volume_id" -ge 0 ]; then
+          break
+      fi
+
+      echo "Last volume ID: $last_volume_id" >> /home/ubuntu/DEVICE.log      
+
+      if [ $i -eq $max_attempts ] ; then
+        logthis "Could not determine the number of last_volume_id after $i attempts. Last response was: $last_volume_id_response"
+        break
+      fi
+
+      sleep $(( 2 ** i + $RANDOM %3 ))
+  done
+
+  echo "$last_volume_id"  
+}
+
+get_last_volume_device() {
+  TAG=amazon-ebs-autoscale-creation-time
+
+  local last_volume_device=""
+  local max_attempts=5
+
+  for i in $(eval echo "{0..$max_attempts}") ; do
+      local last_volume_device=""
+
+      last_volume_device_response=$(
+        aws ec2 describe-volumes \
+          --region $AWS_REGION \
+          --filters Name=attachment.instance-id,Values=$INSTANCE_ID Name=tag-key,Values=$TAG
+      )
+
+      last_volume_device=$(echo "$last_volume_device_response" | jq '.Volumes[-1].Attachments[0].Device')
+      if [ "$last_volume_device" -ge 0 ]; then
+          break
+      fi
+
+      echo "Last volume Device: $last_volume_device" >> /home/ubuntu/DEVICE.log
+
+      if [ $i -eq $max_attempts ] ; then
+        logthis "Could not determine the number of last_volume_device after $i attempts. Last response was: $last_volume_device_response"
+        break
+      fi
+
+      sleep $(( 2 ** i + $RANDOM %3 ))
+  done
+
+  echo "$last_volume_device"  
+}
+
+calc_threshold_up() {
   # calculates percent utilization threshold for adding additional ebs volumes
   # as more ebs volumes are added, the threshold level increases
 
   local num_devices=$1
-  local threshold=${INITIAL_UTILIZATION_THRESHOLD}
+  local threshold=${INITIAL_UTILIZATION_THRESHOLD_UP}
 
-  if [ "$num_devices" -ge "4" ] && [ "$num_devices" -le "6" ]; then
-    threshold=80
-  elif [ "$num_devices" -gt "6" ] && [ "$num_devices" -le "10" ]; then
+  if [ "$num_devices" -ge "3" ] && [ "$num_devices" -le "9" ]; then
     threshold=90
-  elif [ "$num_devices" -gt "10" ]; then
-    threshold=90
+  elif [ "$num_devices" -gt "9" ]; then
+    threshold=95
   else
-    threshold=${INITIAL_UTILIZATION_THRESHOLD}
+    threshold=${INITIAL_UTILIZATION_THRESHOLD_UP} # threshold=80
+  fi
+
+  echo ${threshold}
+}
+
+calc_threshold_down() {
+  # calculates percent utilization threshold for removing additional ebs volumes
+  # as more ebs volumes are added, the threshold level increases
+
+  local num_devices=$1
+  local threshold=${INITIAL_UTILIZATION_THRESHOLD_DOWN}
+
+  if [ "$num_devices" -eq "1" ]; then
+    threshold=30
+  elif [ "$num_devices" -eq "2" ]; then
+    threshold=35
+  elif [ "$num_devices" -eq "3" ]; then
+    threshold=40
+  elif [ "$num_devices" -eq "4" ]; then
+    threshold=45
+  elif [ "$num_devices" -eq "5" ]; then
+    threshold=50
+  elif [ "$num_devices" -eq "6" ]; then
+    threshold=55
+  elif [ "$num_devices" -eq "7" ]; then
+    threshold=60
+  elif [ "$num_devices" -eq "8" ]; then
+    threshold=65
+  elif [ "$num_devices" -eq "9" ]; then
+    threshold=70
+  else
+    threshold=${INITIAL_UTILIZATION_THRESHOLD_DOWN} # threshold=30
   fi
 
   echo ${threshold}
@@ -156,6 +255,7 @@ add_space () {
   local num_devices=$1
   if [ "${num_devices}" -ge "$MAX_EBS_VOLUME_COUNT" ]; then
     logthis "No more volumes can be safely added."
+    echo "No more volumes can be safely added." >> /home/ubuntu/DEVICE.log
     return 0
   fi
 
@@ -165,15 +265,41 @@ add_space () {
     logthis "Extending logical volume ${MOUNTPOINT} by ${vol_size}GB"
 
     DEVICE=$(${BASEDIR}/create-ebs-volume --size ${vol_size} --max-attached-volumes ${MAX_EBS_VOLUME_COUNT})
+    echo "Got DEVICE from create-ebs-volume: $DEVICE">> /home/ubuntu/DEVICE.log
 
     exit_status=$?
+    echo exit_status=$exit_status >> /home/ubuntu/DEVICE.log
     if [ $exit_status -eq 0 ]; then
+
+      if [[ "$DEVICE" == "/dev/xvdba" ]]; then
+          DEVICE="/dev/nvme1n1"
+      elif [[ "$DEVICE" == "/dev/xvdbb" ]]; then
+          DEVICE="/dev/nvme2n1"
+      elif [[ "$DEVICE" == "/dev/xvdbc" ]]; then
+          DEVICE="/dev/nvme3n1"
+      elif [[ "$DEVICE" == "/dev/xvdbd" ]]; then
+          DEVICE="/dev/nvme4n1"
+      elif [[ "$DEVICE" == "/dev/xvdbe" ]]; then
+          DEVICE="/dev/nvme5n1"
+      elif [[ "$DEVICE" == "/dev/xvdbf" ]]; then
+          DEVICE="/dev/nvme6n1"
+      elif [[ "$DEVICE" == "/dev/xvdbg" ]]; then
+          DEVICE="/dev/nvme7n1"
+      elif [[ "$DEVICE" == "/dev/xvdbh" ]]; then
+          DEVICE="/dev/nvme8n1"
+      elif [[ "$DEVICE" == "/dev/xvdbi" ]]; then
+          DEVICE="/dev/nvme9n1"
+      fi
+
+      echo "Correspondent NVMe device: $DEVICE" >> /home/ubuntu/DEVICE.log
+
       if [ "${FILE_SYSTEM}" = "btrfs" ]; then
         logthis "Adding device ${DEVICE} to logical volume ${MOUNTPOINT}"
         btrfs device add ${DEVICE} ${MOUNTPOINT}
         btrfs balance start -m ${MOUNTPOINT}
       else
         logthis "Adding device ${DEVICE} to logical volume /dev/mapper/${LVM_VG}-${LVM_LV}"
+        echo "Adding device ${DEVICE} to logical volume /dev/mapper/${LVM_VG}-${LVM_LV}" >> /home/ubuntu/DEVICE.log
         vgextend ${LVM_VG} ${DEVICE}
         lvresize -l 100%VG /dev/mapper/${LVM_VG}-${LVM_LV}
         resize2fs /dev/mapper/${LVM_VG}-${LVM_LV}
@@ -187,6 +313,87 @@ add_space () {
   else
     logthis "Maximum volume size ($MAX_LOGICAL_VOLUME_SIZE) reached"
   fi
+}
+
+remove_space () {
+  #local num_devices=$(get_num_devices)
+  local num_devices=$1
+  if [ "${num_devices}" -eq 1 ]; then
+    logthis "No more volumes can be safely removed."
+    echo "No more volumes can be safely removed." >> /home/ubuntu/DEVICE.log
+    return 0
+  fi
+
+  LAST_DEVICE=$(get_last_volume_device)
+  sleep $(( 2 ** i + $RANDOM %3 ))
+  LAST_VOLUME_ID=$(get_last_volume_id)
+
+  if [[ -z $LAST_DEVICE ]] || [[ -z $LAST_VOLUME_ID ]]; then
+    logthis "Variable is empty: LAST_DEVICE: $LAST_DEVICE LAST_VOLUME_ID: $LAST_VOLUME_ID."
+    echo "Variable is empty: LAST_DEVICE: $LAST_DEVICE LAST_VOLUME_ID: $LAST_VOLUME_ID." >> /home/ubuntu/DEVICE.log
+    return 0
+  fi
+
+  LAST_DEVICE=$(echo "$LAST_DEVICE" | tr -d '"')
+  LAST_VOLUME_ID=$(echo "$LAST_VOLUME_ID" | tr -d '"')
+  local NVME_DEVICE=""
+
+  if [ "$LAST_DEVICE" = "/dev/xvdba" ]; then
+    NVME_DEVICE="/dev/nvme1n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbb" ]; then
+    NVME_DEVICE="/dev/nvme2n1"
+    echo "ELIF triggered device $LAST_DEVICE." >> /home/ubuntu/DEVICE.log
+  elif [ "$LAST_DEVICE" = "/dev/xvdbc" ]; then
+    NVME_DEVICE="/dev/nvme3n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbd" ]; then
+    NVME_DEVICE="/dev/nvme4n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbe" ]; then
+    NVME_DEVICE="/dev/nvme5n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbf" ]; then
+    NVME_DEVICE="/dev/nvme6n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbg" ]; then
+    NVME_DEVICE="/dev/nvme7n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbh" ]; then
+    NVME_DEVICE="/dev/nvme8n1"
+  elif [ "$LAST_DEVICE" = "/dev/xvdbi" ]; then
+    NVME_DEVICE="/dev/nvme9n1"
+  else
+    logthis "Couldn't recognize device $LAST_DEVICE."
+    echo "Couldn't recognize device $LAST_DEVICE." >> /home/ubuntu/DEVICE.log
+    return 0
+  fi
+
+  logthis "Decreasing logical volume ${MOUNTPOINT} by 1 NVMe $LAST_DEVICE $NVME_DEVICE"
+  echo "Time to remove DEVICE: $LAST_DEVICE $NVME_DEVICE">> /home/ubuntu/DEVICE.log
+
+  if [ "${FILE_SYSTEM}" = "btrfs" ] && [ "$LAST_DEVICE" != "/dev/xvdba" ]; then
+    logthis "Removing device ${LAST_DEVICE} ${NVME_DEVICE} from mount point ${MOUNTPOINT}"
+    echo "Removing device ${LAST_DEVICE} ${NVME_DEVICE} from mount point ${MOUNTPOINT}" >> /home/ubuntu/DEVICE.log
+    sudo btrfs device delete ${NVME_DEVICE} ${MOUNTPOINT}
+    sudo btrfs balance start -m ${MOUNTPOINT}
+
+    logthis "Detaching and removing EBS volume ${LAST_VOLUME_ID}."
+    echo "Detaching and removing EBS volume ${LAST_VOLUME_ID}." >> /home/ubuntu/DEVICE.log
+    aws ec2 detach-volume --volume-id ${LAST_VOLUME_ID} > /dev/null
+    for i in {1..3} ; do
+       if aws ec2 wait volume-available --region $AWS_REGION --volume-ids $LAST_VOLUME_ID; then
+         logthis "volume $LAST_VOLUME_ID detached"
+         break
+       fi
+    done
+    aws ec2 delete-volume --volume-id ${LAST_VOLUME_ID} > /dev/null
+  elif [ "${FILE_SYSTEM}" = "btrfs" ] && [ "$LAST_DEVICE" = "/dev/xvdba" ]; then
+    logthis "There is only initial device $LAST_DEVICE on the system. Cancel deletion."
+    echo "There is only initial device $LAST_DEVICE on the system. Cancel deletion." >> /home/ubuntu/DEVICE.log
+    return 0
+  else
+    logthis "Couldn't remove volume. LVM is not supported."
+    echo "Couldn't remove volume. LVM is not supported." >> /home/ubuntu/DEVICE.log
+    return 0
+  fi
+
+  logthis "Finished removing physical volume."
+  echo "Finished removing physical volume." >> /home/ubuntu/DEVICE.log
 }
 
 # number of event loops between utilization status log lines
@@ -203,7 +410,8 @@ LOG_COUNT=$LOG_INTERVAL
 DETECTION_INTERVAL=$(get_config_value .detection_interval)
 # get the number of devices once when the script first starts
 NUM_DEVICES=$(get_num_devices)
-THRESHOLD=$(calc_threshold "${NUM_DEVICES}")
+THRESHOLD_UP=$(calc_threshold_up "${NUM_DEVICES}")
+THRESHOLD_DOWN=$(calc_threshold_down "${NUM_DEVICES}")
 while true; do
 
   STATS=$(df -BG  ${MOUNTPOINT} | grep -v Filesystem)
@@ -211,17 +419,27 @@ while true; do
   USED=$(echo ${STATS} | awk '{print $3}')
   AVAILABLE=$(echo ${STATS} | awk '{print $4}')
   PCT_UTILIZATION=$(echo ${STATS} | awk '{print $5}' | cut -d"%" -f1 -)
-  if  [ $PCT_UTILIZATION -ge "${THRESHOLD}" ]; then
+  if  [ $PCT_UTILIZATION -ge "${THRESHOLD_UP}" ]; then
     # get number of devices only when we need to add more space
   	NUM_DEVICES=$(get_num_devices)
     logthis "LOW DISK (${PCT_UTILIZATION}%): Adding more."
     add_space "$NUM_DEVICES"
-	NUM_DEVICES=$(expr $NUM_DEVICES + 1 )
-    THRESHOLD=$(calc_threshold "$NUM_DEVICES")
+	  NUM_DEVICES=$(expr $NUM_DEVICES + 1 )
+    THRESHOLD_UP=$(calc_threshold_up "$NUM_DEVICES")
+    LOG_COUNT=$LOG_INTERVAL
+  fi
+  if  [ $PCT_UTILIZATION -le "${THRESHOLD_DOWN}" ]; then
+    # get number of devices only when we need to decrease space
+  	NUM_DEVICES=$(get_num_devices)
+    logthis "Space can be reduced, utilisation: (${PCT_UTILIZATION}%): Removing volume."
+    echo "Space can be reduced, utilisation: (${PCT_UTILIZATION}%): Removing volume." >> /home/ubuntu/DEVICE.log
+    remove_space "$NUM_DEVICES"
+	  NUM_DEVICES=$(expr $NUM_DEVICES - 1 )
+    THRESHOLD_DOWN=$(calc_threshold_down "$NUM_DEVICES")
     LOG_COUNT=$LOG_INTERVAL
   fi
   if [ "${LOG_COUNT}" -ge "${LOG_INTERVAL}" ]; then
-    logthis "Devices ${NUM_DEVICES} : Size ${TOTAL_SIZE} : Used ${USED} : Available ${AVAILABLE} : Used% ${PCT_UTILIZATION}% : Threshold ${THRESHOLD}%"
+    logthis "Devices ${NUM_DEVICES} : Size ${TOTAL_SIZE} : Used ${USED} : Available ${AVAILABLE} : Used% ${PCT_UTILIZATION}% : Threshold ${THRESHOLD_UP}%"
     LOG_COUNT=0
   fi
   LOG_COUNT=$(expr $LOG_COUNT + 1 )

@@ -77,8 +77,11 @@ Options
     --max-attached-volumes N
                         Maximum number of attached volumes. (Default: 16)
 
-    --initial-utilization-threshold N
-                        Initial disk utilization treshold for scale-up. (Default: 50)
+    --initial-utilization-threshold-up N
+                        Initial disk utilization treshold for scale-up. (Default: 80)
+
+    --initial-utilization-threshold-down N
+                        Initial disk utilization treshold for scale-down. (Default: 30)
 
     -s, --initial-size  SIZE_GB
                         Initial size of the volume in GB. (Default: 200)
@@ -100,7 +103,8 @@ MIN_EBS_VOLUME_SIZE=150
 MAX_EBS_VOLUME_SIZE=1500
 MAX_LOGICAL_VOLUME_SIZE=8000
 MAX_ATTACHED_VOLUMES=16
-INITIAL_UTILIZATION_THRESHOLD=50
+INITIAL_UTILIZATION_THRESHOLD_UP=80
+INITIAL_UTILIZATION_THRESHOLD_DOWN=30
 
 DEVICE=""
 FILE_SYSTEM=btrfs
@@ -145,8 +149,12 @@ while (( "$#" )); do
             MAX_ATTACHED_VOLUMES=$2
             shift 2
             ;;
-        --initial-utilization-threshold)
-            INITIAL_UTILIZATION_THRESHOLD=$2
+        --initial-utilization-threshold-up)
+            INITIAL_UTILIZATION_THRESHOLD_UP=$2
+            shift 2
+            ;;
+        --initial-utilization-threshold-down)
+            INITIAL_UTILIZATION_THRESHOLD_DOWN=$2
             shift 2
             ;;
         -d|--initial-device)
@@ -225,7 +233,8 @@ cat ${BASEDIR}/config/ebs-autoscale.json | \
   sed -e "s#%%MAXEBSVOLUMESIZE%%#${MAX_EBS_VOLUME_SIZE}#" | \
   sed -e "s#%%MAXLOGICALVOLUMESIZE%%#${MAX_LOGICAL_VOLUME_SIZE}#" | \
   sed -e "s#%%MAXATTACHEDVOLUMES%%#${MAX_ATTACHED_VOLUMES}#" | \
-  sed -e "s#%%INITIALUTILIZATIONTHRESHOLD%%#${INITIAL_UTILIZATION_THRESHOLD}#" \
+  sed -e "s#%%INITIALUTILIZATIONTHRESHOLDUP%%#${INITIAL_UTILIZATION_THRESHOLD_UP}#" | \
+  sed -e "s#%%INITIALUTILIZATIONTHRESHOLDDOWN%%#${INITIAL_UTILIZATION_THRESHOLD_DOWN}#" \
   > /etc/ebs-autoscale.json
 
 ## Create filesystem
@@ -239,6 +248,28 @@ fi
 # If a device is not given, or if the device is not valid
 if [ -z "${DEVICE}" ] || [ ! -b "${DEVICE}" ]; then
   DEVICE=$(create-ebs-volume --size $SIZE --type $VOLUMETYPE)
+fi
+
+sleep 30
+
+if [[ "$DEVICE" == "/dev/xvdba" ]]; then
+    DEVICE="/dev/nvme1n1"
+elif [[ "$DEVICE" == "/dev/xvdbb" ]]; then
+    DEVICE="/dev/nvme2n1"
+elif [[ "$DEVICE" == "/dev/xvdbc" ]]; then
+    DEVICE="/dev/nvme3n1"
+elif [[ "$DEVICE" == "/dev/xvdbd" ]]; then
+    DEVICE="/dev/nvme4n1"
+elif [[ "$DEVICE" == "/dev/xvdbe" ]]; then
+    DEVICE="/dev/nvme5n1"
+elif [[ "$DEVICE" == "/dev/xvdbf" ]]; then
+    DEVICE="/dev/nvme6n1"
+elif [[ "$DEVICE" == "/dev/xvdbg" ]]; then
+    DEVICE="/dev/nvme7n1"
+elif [[ "$DEVICE" == "/dev/xvdbh" ]]; then
+    DEVICE="/dev/nvme8n1"
+elif [[ "$DEVICE" == "/dev/xvdbi" ]]; then
+    DEVICE="/dev/nvme9n1"
 fi
 
 # create and mount the BTRFS filesystem

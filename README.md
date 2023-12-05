@@ -2,6 +2,10 @@
 
 This is an example of a daemon process that monitors a filesystem mountpoint and automatically expands it when free space falls below a configured threshold. New [Amazon EBS](https://aws.amazon.com/ebs/) volumes are added to the instance as necessary and the underlying filesystem ([BTRFS](http://btrfs.wiki.kernel.org) or [LVM](https://en.wikipedia.org/wiki/Logical_Volume_Manager_(Linux)) with [ext4](https://en.wikipedia.org/wiki/Ext4)) expands as new devices are added.
 
+## Warning
+
+Downscaling is implemented for BTRFS only. Tested on Ubuntu 22.04 with Docker mountpoint `/var/lib/docker`.
+
 ## Assumptions:
 
 1. Code is running on an AWS EC2 instance
@@ -87,8 +91,11 @@ Options
     --max-attached-volumes N
                         Maximum number of attached volumes. (Default: 16)
 
-    --initial-utilization-threshold N
-                        Initial disk utilization treshold for scale-up. (Default: 50)
+    --initial-utilization-threshold-up N
+                        Initial disk utilization treshold for scale-up. (Default: 80)
+
+    --initial-utilization-threshold-down N
+                        Initial disk utilization treshold for scale-down. (Default: 30)
 
     -s, --initial-size  SIZE_GB
                         Initial size of the volume in GB. (Default: 200)
@@ -130,3 +137,54 @@ Please note that if you enable EBS encryption and use a Customer Managed Key wit
 ## License Summary
 
 This sample code is made available under the MIT license. 
+
+## Useful Commands
+
+Manual installation
+```
+sudo bash /home/ubuntu/ebs-scale/install.sh \
+  -m /var/lib/docker \
+  -d /dev/nvme1n1 \
+  -s 200 \
+  -f btrfs \
+  --volume-type gp3 \
+  --volume-iops 12000 \
+  --volume-throughput 300 \
+  --min-ebs-volume-size 200 \
+  --max-ebs-volume-size 200 \
+  --max-total-created-size 1800 \
+  --max-attached-volumes 10 \
+  --initial-utilization-threshold-up 80 \
+  --initial-utilization-threshold-down 30 \
+  2>&1 > /home/ubuntu/ebs-scale/ebs-autoscale-install.log
+```
+
+Displays kernel-related messages retrieved from the kernel ring buffer
+```
+sudo dmesg
+```
+
+Check btrfs usage
+```
+sudo btrfs filesystem show /var/lib/docker/
+```
+
+```
+sudo btrfs filesystem usage -T /var/lib/docker/
+```
+
+Check btrfs errors
+```
+sudo btrfs dev stats /var/lib/docker/
+```
+
+sudo btrfs filesystem df /var/lib/docker
+
+Check for any active usage
+```
+sudo lsof | grep /var/lib/docker/
+```
+
+# btrfs limitations
+# https://wiki.tnonline.net/w/Btrfs/Profiles
+# https://wiki.tnonline.net/w/Btrfs/Adding_and_removing_devices

@@ -29,6 +29,7 @@
 #  POSSIBILITY OF SUCH DAMAGE.
 
 set -e
+set -x
 
 . /usr/local/amazon-ebs-autoscale/shared/utils.sh
 initialize
@@ -152,14 +153,14 @@ if [[ ! "$SIZE" ]]; then
     error "missing required argument --size"
 fi
 
-alphabet=( {a..z} )
+sequence_numbers=( {1..25} )
+sequence_alphabet=( {a..z} )
 
 function get_next_logical_device() {
-    for letter in ${alphabet[@]}; do
-        # use /dev/xvdb* device names to avoid contention for /dev/sd* and /dev/xvda names
-        # only supported by HVM instances
-        if [ ! -b "/dev/xvdb${letter}" ]; then
-            echo "/dev/xvdb${letter}"
+    for ((i=0;i<${#sequence_numbers[@]};i++))
+    do
+        if [ ! -b "/dev/nvme${sequence_numbers[$i]}n1" ]; then
+            echo "/dev/xvdb${sequence_alphabet[$i]}"
             break
         fi
     done
@@ -333,6 +334,8 @@ function create_and_attach_volume() {
     > /dev/null
     
     status="$?"
+    logthis "volume attachment status: $status"
+    sleep 10
     if [ ! "$status" -eq 0 ]; then
         logthis "deleting volume $volume_id"
         aws ec2 delete-volume \
@@ -344,14 +347,59 @@ function create_and_attach_volume() {
     fi
     set -e
 
+    echo "$device after attach-volume" >> /home/ubuntu/LOG
+
     logthis "waiting for volume $volume_id on filesystem"
     while true; do
+        if [[ "$device" == "/dev/xvdba" ]]; then
+            device="/dev/nvme1n1"
+        elif [[ "$device" == "/dev/xvdbb" ]]; then
+            device="/dev/nvme2n1"
+        elif [[ "$device" == "/dev/xvdbc" ]]; then
+            device="/dev/nvme3n1"
+        elif [[ "$device" == "/dev/xvdbd" ]]; then
+            device="/dev/nvme4n1"
+        elif [[ "$device" == "/dev/xvdbe" ]]; then
+            device="/dev/nvme5n1"
+        elif [[ "$device" == "/dev/xvdbf" ]]; then
+            device="/dev/nvme6n1"
+        elif [[ "$device" == "/dev/xvdbg" ]]; then
+            device="/dev/nvme7n1"
+        elif [[ "$device" == "/dev/xvdbh" ]]; then
+            device="/dev/nvme8n1"
+        elif [[ "$device" == "/dev/xvdbi" ]]; then
+            device="/dev/nvme9n1"
+        fi
         if [ -e "$device" ]; then
             logthis "volume $volume_id on filesystem as $device"
             break
         fi
         sleep 1
     done
+
+    echo "$device as a volume $volume_id on filesystem" >> /home/ubuntu/LOG
+
+    if [[ "$device" == "/dev/nvme1n1" ]]; then
+        device="/dev/xvdba"
+    elif [[ "$device" == "/dev/nvme2n1" ]]; then
+        device="/dev/xvdbb"
+    elif [[ "$device" == "/dev/nvme3n1" ]]; then
+        device="/dev/xvdbc"
+    elif [[ "$device" == "/dev/nvme4n1" ]]; then
+        device="/dev/xvdbd"
+    elif [[ "$device" == "/dev/nvme5n1" ]]; then
+        device="/dev/xvdbe"
+    elif [[ "$device" == "/dev/nvme6n1" ]]; then
+        device="/dev/xvdbf"
+    elif [[ "$device" == "/dev/nvme7n1" ]]; then
+        device="/dev/xvdbg"
+    elif [[ "$device" == "/dev/nvme8n1" ]]; then
+        device="/dev/xvdbh"
+    elif [[ "$device" == "/dev/nvme9n1" ]]; then
+        device="/dev/xvdbi"        
+    fi
+
+    echo "$device before modify-instance-attribute" >> /home/ubuntu/LOG
 
     # set volume delete on termination
     aws ec2 modify-instance-attribute \
